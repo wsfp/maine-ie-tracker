@@ -235,7 +235,6 @@ def main():
 
     if not new_rows:
         print("No new independent expenditures found.")
-        return
 
     all_rows = rows + new_rows
     with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
