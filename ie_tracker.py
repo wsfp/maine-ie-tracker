@@ -36,7 +36,8 @@ MAX_PAGES = 200              # safety cap on pagination
 
 COLUMNS = [
     "transaction_id", "date", "filer", "transaction_type", "amount",
-    "payee", "purpose", "explanation", "targets", "detail_url", "first_seen",
+    "payee", "purpose", "explanation", "target_candidate", "support_oppose",
+    "amount_toward_target", "detail_url", "first_seen",
 ]
 
 session = requests.Session()
@@ -141,8 +142,8 @@ def parse_detail_page(html):
             if line in labels:
                 text_pairs[line] = lines[i + 1]
 
-    # Grab everything in the target section as one text blob
-    targets = ""
+    # Grab everything in the target section, then parse out each candidate
+    target_list = []
     heading = soup.find(
         string=re.compile(r"Target Candidate or Ballot Question", re.I)
     )
@@ -156,22 +157,22 @@ def parse_detail_page(html):
             if "Contact the Maine Ethics Commission" in t:
                 break
             parts.append(t)
-            if len(parts) > 40:  # don't wander into the footer
+            if len(parts) > 60:  # don't wander into the footer
                 break
-        # de-duplicate nested-element repeats while keeping order
-        seen_t = set()
-        clean = []
-        for p in parts:
-            if p not in seen_t:
-                seen_t.add(p)
-                clean.append(p)
-        targets = " | ".join(clean)
-        targets = targets.replace("No targets provided", "").strip(" |")
+        section = parts[0] if parts else ""
+        target_list = re.findall(
+            r"Candidate Name (.+?) Amount Spent (\$[\d,.]+) "
+            r"Support or Oppose (Support|Oppose)",
+            section,
+        )
+
+    if not target_list:
+        target_list = [("NONE LISTED", "", "")]
 
     return {
         "purpose": text_pairs.get("Purpose", ""),
         "explanation": text_pairs.get("Explanation of Purpose", ""),
-        "targets": targets or "NONE LISTED",
+        "target_list": target_list,
     }
 
 
@@ -229,14 +230,21 @@ def main():
                   f"({rec['filer'][:40]}, {rec['amount']})")
             try:
                 detail_html = get(rec["detail_url"])
-                rec.update(parse_detail_page(detail_html))
+                details = parse_detail_page(detail_html)
             except Exception as e:
                 print(f"    Problem reading detail page: {e}")
-                rec.update({"purpose": "", "explanation": "",
-                            "targets": "ERROR - CHECK MANUALLY"})
+                details = {"purpose": "", "explanation": "",
+                           "target_list": [("ERROR - CHECK MANUALLY", "", "")]}
+            rec["purpose"] = details["purpose"]
+            rec["explanation"] = details["explanation"]
             rec["first_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             seen.add(rec["transaction_id"])
-            new_rows.append(rec)
+            for name, amt, so in details["target_list"]:
+                row = dict(rec)
+                row["target_candidate"] = name.strip()
+                row["support_oppose"] = so
+                row["amount_toward_target"] = amt
+                new_rows.append(row)
 
         page += 1
 
