@@ -1,15 +1,13 @@
 """
 Maine Independent Expenditure Tracker
 -------------------------------------
-Collects independent expenditure records from
-mainecampaignfinancedisclosure.com, visits each record's detail page
-to get the target candidate / ballot question, and saves everything
-to ie_tracker.csv.
+Collects current-cycle independent expenditure records from
+mainecampaignfinancedisclosure.com, gets each record's target
+candidate from its detail page, matches candidates to their race
+(office + district + party) using the site's candidate list, and
+saves everything to ie_tracker.csv.
 
-Safe to run repeatedly: it only adds records it hasn't seen before.
-
-How to run (after installing Python and the two libraries below):
-    python ie_tracker.py
+Safe to run repeatedly: it only fetches records it hasn't seen.
 """
 
 import csv
@@ -23,21 +21,21 @@ try:
     import requests
     from bs4 import BeautifulSoup
 except ImportError:
-    sys.exit(
-        "Missing libraries. Run this first:\n"
-        "    pip install requests beautifulsoup4"
-    )
+    sys.exit("Missing libraries. Run: pip install requests beautifulsoup4")
 
 BASE = "https://www.mainecampaignfinancedisclosure.com"
 LIST_URL = BASE + "/public/activities"
+CANDIDATES_URL = BASE + "/public/candidates"
 CSV_FILE = "ie_tracker.csv"
-DELAY_SECONDS = 1.5          # pause between requests (be polite to the server)
-MAX_PAGES = 200              # safety cap on pagination
+DELAY_SECONDS = 1.5
+MAX_PAGES = 200
+CYCLE_START = "2025-01-01"   # ignore anything before this date (prior cycle)
 
 COLUMNS = [
     "transaction_id", "date", "filer", "transaction_type", "amount",
     "payee", "purpose", "explanation", "target_candidate", "support_oppose",
-    "amount_toward_target", "detail_url", "first_seen",
+    "amount_toward_target", "race", "office", "district", "party",
+    "detail_url", "first_seen",
 ]
 
 session = requests.Session()
@@ -53,16 +51,86 @@ session.headers.update({
 
 def get(url, params=None):
     """Fetch a page, with a cache-busting parameter to avoid stale results."""
-    params = list(params or [])   # keep duplicate keys (two filter checkboxes)
-    params.append(("_cb", str(int(time.time() * 1000))))  # cache buster
+    params = list(params or [])   # keep duplicate keys (filter checkboxes)
+    params.append(("_cb", str(int(time.time() * 1000))))
     resp = session.get(url, params=params, timeout=60)
     resp.raise_for_status()
     time.sleep(DELAY_SECONDS)
     return resp.text
 
 
+def iso_date(us_date):
+    """Turn 07/01/2026 into 2026-07-01 (sortable). Leave odd values alone."""
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})", us_date or "")
+    return f"{m.group(3)}-{m.group(1)}-{m.group(2)}" if m else (us_date or "")
+
+
+def money_to_number(text):
+    """Turn $7,496.00 into 7496.00 for easy math in spreadsheets."""
+    cleaned = re.sub(r"[^\d.]", "", text or "")
+    return cleaned or ""
+
+
+def name_key(name):
+    """Normalize a candidate name for matching across formats.
+    Handles 'Troy Jackson' vs 'Jackson, Troy' vs middle names/suffixes."""
+    n = re.sub(r"[.,]", " ", (name or "").lower())
+    drop = {"jr", "sr", "ii", "iii", "iv"}
+    return frozenset(t for t in n.split() if t and t not in drop)
+
+
+def build_race_map():
+    """Scrape the All Registered Candidates list into
+    {name_key: (race, office, district, party)}."""
+    print("Building candidate/race map...")
+    race_map = {}
+    page = 1
+    while page <= 50:
+        html = get(CANDIDATES_URL, params=[("page", str(page)),
+                                           ("limit", "100")])
+        soup = BeautifulSoup(html, "html.parser")
+        found = 0
+        for link in soup.select('a[href*="/public/filers/f_"]'):
+            row = link.find_parent("tr")
+            if not row:
+                continue
+            cells = [c.get_text(" ", strip=True) for c in row.find_all("td")]
+            if len(cells) < 5:
+                continue
+            name, _year, office, district, party = cells[0], cells[1], cells[2], cells[3], cells[4]
+            race = office
+            if district and district != "-":
+                race = f"{office} District {district}"
+            key = name_key(name)
+            if key and key not in race_map:
+                race_map[key] = (race, office, district, party)
+                found += 1
+        if found == 0:
+            break
+        page += 1
+    print(f"  Mapped {len(race_map)} candidates.")
+    return race_map
+
+
+def lookup_race(target_name, race_map):
+    """Find a candidate's race, tolerating name-format differences."""
+    key = name_key(target_name)
+    if not key:
+        return ("", "", "", "")
+    if key in race_map:
+        return race_map[key]
+    # Fall back: allow extra middle names on either side,
+    # as long as at least first + last name overlap.
+    best = None
+    for k, v in race_map.items():
+        if (k <= key or key <= k) and len(k & key) >= 2:
+            if best is not None:      # two possible matches -> too risky
+                return ("", "", "", "")
+            best = v
+    return best or ("", "", "", "")
+
+
 def load_existing():
-    """Read IDs already saved so we don't re-fetch them."""
     seen = set()
     rows = []
     if os.path.exists(CSV_FILE):
@@ -74,22 +142,16 @@ def load_existing():
 
 
 def list_page_params(page):
-    """Query parameters for the IE-filtered transaction list."""
     return [
         ("q[transaction_type_in][]", "independent_expenditure"),
         ("q[transaction_type_in][]", "returned_independent_expenditure"),
         ("q[s]", "date desc"),
-        ("limit", "100"),   # ask for big pages; site may cap this lower
+        ("limit", "100"),
         ("page", str(page)),
     ]
 
 
 def parse_list_page(html):
-    """
-    Pull rows out of the results table.
-    Returns a list of dicts with id, filer, transaction_type, payee, date,
-    amount, detail_url -- plus a flag for whether the filter looks applied.
-    """
     soup = BeautifulSoup(html, "html.parser")
     records = []
     for link in soup.select('a[href*="/public/activities/a_"]'):
@@ -99,19 +161,15 @@ def parse_list_page(html):
             continue
         row = link.find_parent("tr")
         cells = [c.get_text(" ", strip=True) for c in row.find_all("td")] if row else []
-        # Expected column order on the site: Filer | Type | Source/Payee | Date | Amount
-        rec = {
+        records.append({
             "transaction_id": m.group(1),
             "filer": cells[0] if len(cells) > 0 else link.get_text(strip=True),
             "transaction_type": cells[1] if len(cells) > 1 else "",
             "payee": cells[2] if len(cells) > 2 else "",
-            "date": cells[3] if len(cells) > 3 else "",
-            "amount": cells[4] if len(cells) > 4 else "",
+            "date": iso_date(cells[3]) if len(cells) > 3 else "",
+            "amount": money_to_number(cells[4]) if len(cells) > 4 else "",
             "detail_url": BASE + "/public/activities/" + m.group(1),
-        }
-        records.append(rec)
-
-    # Sanity check: with the filter applied, rows should say Independent Expenditure
+        })
     typed = [r for r in records if r["transaction_type"]]
     filter_ok = (not typed) or any(
         "independent" in r["transaction_type"].lower() for r in typed
@@ -120,33 +178,21 @@ def parse_list_page(html):
 
 
 def parse_detail_page(html):
-    """
-    Pull purpose, explanation, and the Target Candidate / Ballot Question
-    section from a transaction's detail page.
-    """
     soup = BeautifulSoup(html, "html.parser")
     text_pairs = {}
-
-    # The detail pages are label/value lists. Try <dt>/<dd> first,
-    # then fall back to scanning label text.
     for dt in soup.find_all("dt"):
         dd = dt.find_next_sibling("dd")
         if dd:
             text_pairs[dt.get_text(strip=True)] = dd.get_text(" ", strip=True)
-
     if not text_pairs:
-        # Fallback: walk all text lines and pair known labels with what follows
         labels = {"Type", "Date", "Amount", "Purpose", "Explanation of Purpose"}
         lines = [t.strip() for t in soup.get_text("\n").split("\n") if t.strip()]
         for i, line in enumerate(lines[:-1]):
             if line in labels:
                 text_pairs[line] = lines[i + 1]
 
-    # Grab everything in the target section, then parse out each candidate
     target_list = []
-    heading = soup.find(
-        string=re.compile(r"Target Candidate or Ballot Question", re.I)
-    )
+    heading = soup.find(string=re.compile(r"Target Candidate or Ballot Question", re.I))
     if heading:
         parts = []
         node = heading.find_parent()
@@ -157,7 +203,7 @@ def parse_detail_page(html):
             if "Contact the Maine Ethics Commission" in t:
                 break
             parts.append(t)
-            if len(parts) > 60:  # don't wander into the footer
+            if len(parts) > 60:
                 break
         section = parts[0] if parts else ""
         target_list = re.findall(
@@ -165,7 +211,6 @@ def parse_detail_page(html):
             r"Support or Oppose (Support|Oppose)",
             section,
         )
-
     if not target_list:
         target_list = [("NONE LISTED", "", "")]
 
@@ -178,13 +223,27 @@ def parse_detail_page(html):
 
 def main():
     seen, rows = load_existing()
-    print(f"Already saved: {len(seen)} records")
+
+    # Drop anything from before the current cycle (handles old data too)
+    before = len(rows)
+    rows = [r for r in rows if iso_date(r.get("date", "")) >= CYCLE_START]
+    if before - len(rows):
+        print(f"Removed {before - len(rows)} rows from before {CYCLE_START}.")
+    for r in rows:
+        r["date"] = iso_date(r.get("date", ""))
+        r["amount"] = money_to_number(r.get("amount", ""))
+        r["amount_toward_target"] = money_to_number(r.get("amount_toward_target", ""))
+
+    print(f"Already saved: {len(seen)} transactions")
+
+    race_map = build_race_map()
 
     new_rows = []
     page = 1
     stale_streak = 0
+    reached_old_records = False
 
-    while page <= MAX_PAGES:
+    while page <= MAX_PAGES and not reached_old_records:
         print(f"Fetching list page {page}...")
         try:
             html = get(LIST_URL, params=list_page_params(page))
@@ -194,35 +253,31 @@ def main():
 
         records, filter_ok = parse_list_page(html)
         if not filter_ok:
-            print("  WARNING: The site may have ignored the filter and served "
-                  "cached results. Waiting 10 seconds and retrying once...")
+            print("  WARNING: filter may not have applied; retrying once...")
             time.sleep(10)
             html = get(LIST_URL, params=list_page_params(page))
             records, filter_ok = parse_list_page(html)
             if not filter_ok:
                 with open("debug_list_page.html", "w", encoding="utf-8") as f:
                     f.write(html)
-                sys.exit("  Filter still not applied. Saved the page as "
-                         "debug_list_page.html -- send this file to Claude.")
+                sys.exit("  Filter still not applied; saved debug_list_page.html")
 
         if not records:
-            if page == 1:
-                with open("debug_list_page.html", "w", encoding="utf-8") as f:
-                    f.write(html)
-                soup = BeautifulSoup(html, "html.parser")
-                title = soup.title.get_text(strip=True) if soup.title else "(no title)"
-                print(f"  DEBUG: page 1 had no transaction rows. Page title: {title}")
-                print("  DEBUG: saved the page as debug_list_page.html for inspection.")
             print("  No more records. Done paging.")
             break
 
-        fresh = [r for r in records if r["transaction_id"] not in seen]
-        if not fresh:
+        # Records are newest-first, so stop once we're past the cycle start
+        in_cycle = [r for r in records if r["date"] >= CYCLE_START]
+        if len(in_cycle) < len(records):
+            reached_old_records = True
+
+        fresh = [r for r in in_cycle if r["transaction_id"] not in seen]
+        if not fresh and in_cycle:
             stale_streak += 1
             if stale_streak >= 2:
                 print("  Reached records we already have. Stopping.")
                 break
-        else:
+        elif fresh:
             stale_streak = 0
 
         for rec in fresh:
@@ -243,24 +298,36 @@ def main():
                 row = dict(rec)
                 row["target_candidate"] = name.strip()
                 row["support_oppose"] = so
-                row["amount_toward_target"] = amt
+                row["amount_toward_target"] = money_to_number(amt)
                 new_rows.append(row)
 
         page += 1
 
-    if not new_rows:
-        print("No new independent expenditures found.")
-
     all_rows = rows + new_rows
+
+    # (Re)apply the race mapping to every row, old and new, so
+    # late-registering candidates get filled in over time.
+    unmatched = set()
+    for row in all_rows:
+        race, office, district, party = lookup_race(
+            row.get("target_candidate", ""), race_map)
+        row["race"], row["office"] = race, office
+        row["district"], row["party"] = district, party
+        if not race and row.get("target_candidate") not in ("", "NONE LISTED"):
+            unmatched.add(row.get("target_candidate"))
+
+    all_rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+
     with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
         writer.writeheader()
-        for row in all_rows:
-            writer.writerow(row)
+        writer.writerows(all_rows)
 
-    print(f"\nAdded {len(new_rows)} new records. "
-          f"Total saved: {len(all_rows)}.")
-    print(f"Open {CSV_FILE} in Excel or Google Sheets.")
+    print(f"\nAdded {len(new_rows)} new rows. Total: {len(all_rows)}.")
+    if unmatched:
+        print(f"Couldn't match {len(unmatched)} candidate name(s) to a race:")
+        for n in sorted(unmatched):
+            print(f"  - {n}")
 
 
 if __name__ == "__main__":
