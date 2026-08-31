@@ -52,8 +52,8 @@ session.headers.update({
 
 def get(url, params=None):
     """Fetch a page, with a cache-busting parameter to avoid stale results."""
-    params = dict(params or {})
-    params["_cb"] = str(int(time.time() * 1000))  # cache buster
+    params = list(params or [])   # keep duplicate keys (two filter checkboxes)
+    params.append(("_cb", str(int(time.time() * 1000))))  # cache buster
     resp = session.get(url, params=params, timeout=60)
     resp.raise_for_status()
     time.sleep(DELAY_SECONDS)
