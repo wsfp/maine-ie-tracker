@@ -30,12 +30,13 @@ CSV_FILE = "ie_tracker.csv"
 DELAY_SECONDS = 1.5
 MAX_PAGES = 200
 CYCLE_START = "2025-01-01"   # ignore anything before this date (prior cycle)
+PRIMARY_DATE = "2026-06-09"  # on/before this = Primary, after = General
 
 COLUMNS = [
     "transaction_id", "date", "filer", "transaction_type", "amount",
     "payee", "purpose", "explanation", "target_candidate", "support_oppose",
     "amount_toward_target", "race", "office", "district", "party",
-    "detail_url", "first_seen",
+    "detail_url", "first_seen", "phase",
 ]
 
 session = requests.Session()
@@ -340,6 +341,13 @@ def main():
         row["district"], row["party"] = district, party
         if not race and row.get("target_candidate") not in ("", "NONE LISTED"):
             unmatched.add(row.get("target_candidate"))
+        d = row.get("date", "")
+        if d < "2026-01-01":
+            row["phase"] = "2025 Special"
+        elif d <= PRIMARY_DATE:
+            row["phase"] = "Primary"
+        else:
+            row["phase"] = "General"
 
     all_rows.sort(key=lambda r: r.get("date", ""), reverse=True)
 
