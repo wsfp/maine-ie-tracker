@@ -205,6 +205,13 @@ def main():
                          "debug_list_page.html -- send this file to Claude.")
 
         if not records:
+            if page == 1:
+                with open("debug_list_page.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+                soup = BeautifulSoup(html, "html.parser")
+                title = soup.title.get_text(strip=True) if soup.title else "(no title)"
+                print(f"  DEBUG: page 1 had no transaction rows. Page title: {title}")
+                print("  DEBUG: saved the page as debug_list_page.html for inspection.")
             print("  No more records. Done paging.")
             break
 
