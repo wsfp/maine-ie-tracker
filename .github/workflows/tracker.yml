@@ -30,6 +30,6 @@ jobs:
         run: |
           git config user.name "ie-tracker-bot"
           git config user.email "actions@github.com"
-          git add ie_tracker.csv
+          git add -A
           git diff --cached --quiet || git commit -m "Update IE data $(date -u +%Y-%m-%d)"
-          git push
+          git diff --quiet HEAD origin/main 2>/dev/null || git push
