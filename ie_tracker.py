@@ -71,12 +71,37 @@ def money_to_number(text):
     return cleaned or ""
 
 
+NICKNAMES = {
+    "rick": "richard", "dick": "richard", "rich": "richard",
+    "bobby": "robert", "bob": "robert", "rob": "robert",
+    "mike": "michael", "bill": "william", "will": "william",
+    "jim": "james", "jimmy": "james", "tom": "thomas",
+    "dan": "daniel", "danny": "daniel", "dave": "david",
+    "steve": "steven", "chris": "christopher", "matt": "matthew",
+    "tony": "anthony", "ed": "edward", "ted": "edward",
+    "joe": "joseph", "ben": "benjamin", "andy": "andrew",
+    "drew": "andrew", "chuck": "charles", "charlie": "charles",
+    "ken": "kenneth", "kenny": "kenneth", "nick": "nicholas",
+    "pat": "patrick", "greg": "gregory", "jeff": "jeffrey",
+    "sam": "samuel", "beth": "elizabeth", "liz": "elizabeth",
+    "betsy": "elizabeth", "kate": "katherine", "katie": "katherine",
+    "kathy": "katherine", "sue": "susan", "peggy": "margaret",
+    "meg": "margaret", "jen": "jennifer", "jenny": "jennifer",
+    "becky": "rebecca", "vicki": "victoria", "deb": "deborah",
+    "debbie": "deborah", "abby": "abigail",
+}
+
+
 def name_key(name):
     """Normalize a candidate name for matching across formats.
-    Handles 'Troy Jackson' vs 'Jackson, Troy' vs middle names/suffixes."""
+    Handles 'Troy Jackson' vs 'Jackson, Troy', middle names, suffixes,
+    nicknames (Rick/Richard), and stray 'for Governor' style endings."""
     n = re.sub(r"[.,]", " ", (name or "").lower())
+    n = re.sub(r"\bfor (governor|senate|senator|house|representative"
+               r"|congress|sheriff|mayor)\b.*", " ", n)
     drop = {"jr", "sr", "ii", "iii", "iv"}
-    return frozenset(t for t in n.split() if t and t not in drop)
+    tokens = [NICKNAMES.get(t, t) for t in n.split() if t and t not in drop]
+    return frozenset(tokens)
 
 
 def build_race_map():
