@@ -2,11 +2,12 @@ name: Maine IE Tracker
 
 on:
   schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch:        # also lets you run it manually with a button
+    - cron: "0 * * * *"     # every hour
+  workflow_dispatch:         # manual run button
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   scrape:
@@ -25,6 +26,17 @@ jobs:
 
       - name: Run the tracker
         run: python ie_tracker.py
+
+      - name: Open an issue if a watched race has new spending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f alert.txt ]; then
+            gh issue create \
+              --title "New IE in watched race ($(date -u +%Y-%m-%d))" \
+              --body-file alert.txt
+            rm alert.txt
+          fi
 
       - name: Save the updated CSV back to the repository
         run: |
