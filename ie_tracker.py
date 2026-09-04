@@ -36,7 +36,7 @@ COLUMNS = [
     "transaction_id", "date", "filer", "transaction_type", "amount",
     "payee", "purpose", "explanation", "target_candidate", "support_oppose",
     "amount_toward_target", "race", "office", "district", "party",
-    "detail_url", "first_seen", "phase",
+    "detail_url", "first_seen", "phase", "target_as_filed",
 ]
 
 session = requests.Session()
@@ -129,7 +129,7 @@ def build_race_map():
                 race = f"{office} District {district}"
             key = name_key(name)
             if key and key not in race_map:
-                race_map[key] = (race, office, district, party)
+                race_map[key] = (name, race, office, district, party)
                 found += 1
         if found == 0:
             break
@@ -139,10 +139,11 @@ def build_race_map():
 
 
 def lookup_race(target_name, race_map):
-    """Find a candidate's race, tolerating name-format differences."""
+    """Find a candidate's official name and race, tolerating
+    name-format differences (Rick/Richard, Last-First order, etc.)."""
     key = name_key(target_name)
     if not key:
-        return ("", "", "", "")
+        return ("", "", "", "", "")
     if key in race_map:
         return race_map[key]
     # Fall back: allow extra middle names on either side,
@@ -151,9 +152,9 @@ def lookup_race(target_name, race_map):
     for k, v in race_map.items():
         if (k <= key or key <= k) and len(k & key) >= 2:
             if best is not None:      # two possible matches -> too risky
-                return ("", "", "", "")
+                return ("", "", "", "", "")
             best = v
-    return best or ("", "", "", "")
+    return best or ("", "", "", "", "")
 
 
 def load_existing():
@@ -335,10 +336,16 @@ def main():
     # late-registering candidates get filled in over time.
     unmatched = set()
     for row in all_rows:
-        race, office, district, party = lookup_race(
+        official, race, office, district, party = lookup_race(
             row.get("target_candidate", ""), race_map)
         row["race"], row["office"] = race, office
         row["district"], row["party"] = district, party
+        if official and official != row.get("target_candidate"):
+            # Unify spellings: keep what the filer wrote for reference,
+            # but use the official registered name everywhere.
+            row["target_as_filed"] = row.get("target_as_filed") or \
+                row.get("target_candidate", "")
+            row["target_candidate"] = official
         if not race and row.get("target_candidate") not in ("", "NONE LISTED"):
             unmatched.add(row.get("target_candidate"))
         d = row.get("date", "")
