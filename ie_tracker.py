@@ -31,6 +31,7 @@ DELAY_SECONDS = 1.5
 MAX_PAGES = 200
 CYCLE_START = "2025-01-01"   # ignore anything before this date (prior cycle)
 PRIMARY_DATE = "2026-06-09"  # on/before this = Primary, after = General
+WATCH_RACES = ["Senator District 8"]   # races that trigger an email alert
 
 COLUMNS = [
     "transaction_id", "date", "filer", "transaction_type", "amount",
@@ -368,6 +369,20 @@ def main():
         print(f"Couldn't match {len(unmatched)} candidate name(s) to a race:")
         for n in sorted(unmatched):
             print(f"  - {n}")
+
+    # Write an alert file if any NEW rows are in a watched race;
+    # the GitHub workflow turns this into an email notification.
+    alerts = [r for r in new_rows if r.get("race") in WATCH_RACES]
+    if alerts:
+        with open("alert.txt", "w", encoding="utf-8") as f:
+            for r in alerts:
+                f.write(f"{r['date']}: {r['filer']} spent "
+                        f"${r['amount_toward_target']} to "
+                        f"{(r['support_oppose'] or '?').lower()} "
+                        f"{r['target_candidate']} ({r['race']})\n"
+                        f"Purpose: {r.get('purpose','')}\n"
+                        f"{r['detail_url']}\n\n")
+        print(f"ALERT: {len(alerts)} new expenditure(s) in watched races.")
 
 
 if __name__ == "__main__":
