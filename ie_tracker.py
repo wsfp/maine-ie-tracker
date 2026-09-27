@@ -37,7 +37,7 @@ COLUMNS = [
     "transaction_id", "date", "filer", "transaction_type", "amount",
     "payee", "purpose", "explanation", "target_candidate", "support_oppose",
     "amount_toward_target", "race", "office", "district", "party",
-    "detail_url", "first_seen", "phase", "target_as_filed",
+    "detail_url", "first_seen", "phase", "target_as_filed", "district_num",
 ]
 
 session = requests.Session()
@@ -349,6 +349,11 @@ def main():
             row["target_candidate"] = official
         if not race and row.get("target_candidate") not in ("", "NONE LISTED"):
             unmatched.add(row.get("target_candidate"))
+        # Numeric version of the district, so spreadsheets sort
+        # 2 before 10 instead of alphabetically. Blank for statewide.
+        dist_digits = re.sub(r"[^\d]", "", district or "")
+        row["district_num"] = int(dist_digits) if dist_digits else ""
+
         d = row.get("date", "")
         if d < "2026-01-01":
             row["phase"] = "2025 Special"
