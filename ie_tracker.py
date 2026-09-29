@@ -33,6 +33,23 @@ CYCLE_START = "2025-01-01"   # ignore anything before this date (prior cycle)
 PRIMARY_DATE = "2026-06-09"  # on/before this = Primary, after = General
 WATCH_RACES = ["Senator District 8"]   # races that trigger an email alert
 
+# Names the automatic matcher can't resolve — fill these in by hand.
+# Format:  "name as filed": (official name, office, district, party)
+# Leave district as "-" for statewide offices. Add entries as they show
+# up in the run log's "Couldn't match" list.
+MANUAL_RACES = {
+    "Scott Harriman": ("Scott A. Harriman", "Representative", "94", "Democratic"),
+    # "Fish, Carolyn": ("Carolyn Fish", "Representative", "??", "??"),
+    # "Janet Beaudoin": ("Janet Beaudoin", "Representative", "??", "??"),
+}
+
+# Target names that aren't people at all (filer typos / ad descriptions).
+# Listed here so they stop appearing in the "Couldn't match" warnings.
+NOT_CANDIDATES = [
+    "Digital Buy: Programmatic",
+    "Trafficking and Close Captioning",
+]
+
 COLUMNS = [
     "transaction_id", "date", "filer", "transaction_type", "amount",
     "payee", "purpose", "explanation", "target_candidate", "support_oppose",
@@ -145,6 +162,15 @@ def lookup_race(target_name, race_map):
     key = name_key(target_name)
     if not key:
         return ("", "", "", "", "")
+
+    # Hand-entered overrides win over everything else.
+    for filed_name, (official, office, district, party) in MANUAL_RACES.items():
+        if name_key(filed_name) == key:
+            race = office
+            if district and district != "-":
+                race = f"{office} District {district}"
+            return (official, race, office, district, party)
+
     if key in race_map:
         return race_map[key]
     # Fall back: allow extra middle names on either side,
@@ -347,7 +373,8 @@ def main():
             row["target_as_filed"] = row.get("target_as_filed") or \
                 row.get("target_candidate", "")
             row["target_candidate"] = official
-        if not race and row.get("target_candidate") not in ("", "NONE LISTED"):
+        if not race and row.get("target_candidate") not in (
+                ["", "NONE LISTED"] + NOT_CANDIDATES):
             unmatched.add(row.get("target_candidate"))
         # Numeric version of the district, so spreadsheets sort
         # 2 before 10 instead of alphabetically. Blank for statewide.
