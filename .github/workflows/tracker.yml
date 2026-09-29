@@ -2,7 +2,7 @@ name: Maine IE Tracker
 
 on:
   schedule:
-    - cron: "0 * * * *"     # every hour
+    - cron: "7,37 * * * *"     # every half hour
   workflow_dispatch:         # manual run button
 
 permissions:
