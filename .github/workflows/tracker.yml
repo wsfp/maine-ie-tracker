@@ -2,16 +2,22 @@ name: Maine IE Tracker
 
 on:
   schedule:
-    - cron: "7,37 * * * *"     # every half hour
-  workflow_dispatch:         # manual run button
+    - cron: "17 */4 * * *"    # GitHub starts a run every 4 hours
+  workflow_dispatch:           # manual run button
 
 permissions:
   contents: write
   issues: write
 
+# If a new run starts while one is still looping, the old one steps aside.
+concurrency:
+  group: ie-tracker
+  cancel-in-progress: true
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 350        # just under GitHub's 6-hour limit
     steps:
       - name: Get the repository files
         uses: actions/checkout@v4
@@ -24,24 +30,32 @@ jobs:
       - name: Install libraries
         run: pip install requests beautifulsoup4
 
-      - name: Run the tracker
-        run: python ie_tracker.py
-
-      - name: Open an issue if a watched race has new spending
+      - name: Check for new filings every 15 minutes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -f alert.txt ]; then
-            gh issue create \
-              --title "New IE in watched race ($(date -u +%Y-%m-%d))" \
-              --body-file alert.txt
-            rm alert.txt
-          fi
-
-      - name: Save the updated CSV back to the repository
-        run: |
           git config user.name "ie-tracker-bot"
           git config user.email "actions@github.com"
-          git add -A
-          git diff --cached --quiet || git commit -m "Update IE data $(date -u +%Y-%m-%d)"
-          git diff --quiet HEAD origin/main 2>/dev/null || git push
+
+          for i in $(seq 1 22); do
+            echo "=== Check $i of 22 at $(date -u '+%H:%M UTC') ==="
+            python ie_tracker.py || echo "Scrape had a problem; will retry next cycle."
+
+            if [ -f alert.txt ]; then
+              gh issue create \
+                --title "New IE in watched race ($(date -u '+%Y-%m-%d %H:%M'))" \
+                --body-file alert.txt || echo "Could not open issue."
+              rm -f alert.txt
+            fi
+
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "Update IE data $(date -u '+%Y-%m-%d %H:%M')"
+              git pull --rebase --autostash origin main || true
+              git push || echo "Push failed; will retry next cycle."
+            else
+              echo "No new data."
+            fi
+
+            if [ "$i" -lt 22 ]; then sleep 900; fi
+          done
