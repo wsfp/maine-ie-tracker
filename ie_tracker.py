@@ -294,7 +294,6 @@ def main():
 
     new_rows = []
     page = 1
-    stale_streak = 0
     reached_old_records = False
 
     while page <= MAX_PAGES and not reached_old_records:
@@ -320,19 +319,15 @@ def main():
             print("  No more records. Done paging.")
             break
 
-        # Records are newest-first, so stop once we're past the cycle start
+        # Records are newest-first by EXPENDITURE date, but a filing can
+        # arrive days late -- so scan every page of the cycle each run
+        # rather than stopping at the first familiar records. Only unseen
+        # transactions cost a detail-page fetch, so this stays cheap.
         in_cycle = [r for r in records if r["date"] >= CYCLE_START]
         if len(in_cycle) < len(records):
             reached_old_records = True
 
         fresh = [r for r in in_cycle if r["transaction_id"] not in seen]
-        if not fresh and in_cycle:
-            stale_streak += 1
-            if stale_streak >= 2:
-                print("  Reached records we already have. Stopping.")
-                break
-        elif fresh:
-            stale_streak = 0
 
         for rec in fresh:
             print(f"  Getting details: {rec['transaction_id']} "
