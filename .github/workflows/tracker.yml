@@ -2,7 +2,8 @@ name: Maine IE Tracker
 
 on:
   schedule:
-    - cron: "17 */4 * * *"    # GitHub starts a run every 4 hours
+      - cron: "17 */4 * * *"
+      - cron: "47 */2 * * *"  
   workflow_dispatch:           # manual run button
 
 permissions:
