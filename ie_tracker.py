@@ -55,6 +55,7 @@ COLUMNS = [
     "payee", "purpose", "explanation", "target_candidate", "support_oppose",
     "amount_toward_target", "race", "office", "district", "party",
     "detail_url", "first_seen", "phase", "target_as_filed", "district_num",
+    "created_at",
 ]
 
 session = requests.Session()
@@ -82,6 +83,30 @@ def iso_date(us_date):
     """Turn 07/01/2026 into 2026-07-01 (sortable). Leave odd values alone."""
     m = re.match(r"(\d{2})/(\d{2})/(\d{4})", us_date or "")
     return f"{m.group(3)}-{m.group(1)}-{m.group(2)}" if m else (us_date or "")
+
+
+MONTHS = {m: i for i, m in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"], 1)}
+
+
+def long_date_to_iso(text):
+    """'October 03, 2026 4:15 PM EDT' -> '2026-10-03 16:15'
+    (date alone if no time is shown). Sorts correctly as text."""
+    m = re.match(r"([A-Z][a-z]+) (\d{1,2}), (\d{4})"
+                 r"(?:\s+(\d{1,2}):(\d{2})\s*([AP]M))?", text or "")
+    if not m:
+        return text or ""
+    month = MONTHS.get(m.group(1))
+    if not month:
+        return text
+    out = f"{m.group(3)}-{month:02d}-{int(m.group(2)):02d}"
+    if m.group(4):
+        hour = int(m.group(4)) % 12
+        if m.group(6) == "PM":
+            hour += 12
+        out += f" {hour:02d}:{m.group(5)}"
+    return out
 
 
 def money_to_number(text):
@@ -268,9 +293,22 @@ def parse_detail_page(html):
     if not target_list:
         target_list = [("NONE LISTED", "", "")]
 
+    # "Created At" is when the filing was submitted, e.g.
+    # "October 03, 2026 4:15 PM EDT"
+    page_text = soup.get_text("\n")
+    created_at = ""
+    m = re.search(
+        r"Created At\s*\n\s*([A-Z][a-z]+ \d{1,2}, \d{4}"
+        r"(?:\s+\d{1,2}:\d{2}\s*[AP]M(?:\s+[A-Z]{2,4})?)?)",
+        page_text,
+    )
+    if m:
+        created_at = long_date_to_iso(m.group(1))
+
     return {
         "purpose": text_pairs.get("Purpose", ""),
         "explanation": text_pairs.get("Explanation of Purpose", ""),
+        "created_at": created_at,
         "target_list": target_list,
     }
 
@@ -342,6 +380,7 @@ def main():
             rec["purpose"] = details["purpose"]
             rec["explanation"] = details["explanation"]
             rec["first_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            rec["created_at"] = details.get("created_at", "")
             seen.add(rec["transaction_id"])
             for name, amt, so in details["target_list"]:
                 row = dict(rec)
@@ -384,7 +423,13 @@ def main():
         else:
             row["phase"] = "General"
 
-    all_rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+    all_rows.sort(key=lambda r: (r.get("created_at", ""), r.get("date", "")),
+                  reverse=True)
+
+    missing = sum(1 for r in all_rows if not r.get("created_at"))
+    if missing:
+        print(f"Note: {missing} row(s) have no filing timestamp "
+              f"(collected before this column existed).")
 
     with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
